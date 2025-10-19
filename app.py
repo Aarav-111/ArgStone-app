@@ -1,6 +1,6 @@
 from flask import Flask, render_template_string, request, jsonify
-import webbrowser
 from urllib.parse import quote_plus
+import os
 
 app = Flask(__name__)
 
@@ -113,11 +113,24 @@ HTML_PAGE = """
       const kernels = parseInt(kernelsInput.value) || 1;
       const type = typeSel.value || 'logic';
       if (!prompt) return;
-      await fetch('/open', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ prompt, stones, kernels, type })
-      });
+      try {
+        const res = await fetch(window.location.origin + '/open', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ prompt, stones, kernels, type })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(()=>({error:'unknown'}));
+          alert('Error: ' + (err.error || 'server error'));
+          return;
+        }
+        const data = await res.json();
+        for (let i = 0; i < (data.opened || 1); ++i) {
+          window.open(data.url, '_blank');
+        }
+      } catch (err) {
+        alert('Network error: ' + err.message);
+      }
     });
   </script>
 </body>
@@ -144,63 +157,33 @@ def open_chat():
     if stones < 1 or kernels < 1:
         return jsonify({"error": "stones and kernels must be >= 1"}), 400
 
-    # Build system prompt per selection
     if typ == "math":
         a = kernels / 10.0
         b = kernels / 2.0
         c = b - a
         system_prompt = (
-            f"Generate **exactly {kernels} unique answers** to the user’s question, divided as follows:\n"
-            f"* **{format_one_decimal(a)} Correct Answers:** Mathematically or logically correct results.\n"
-            f"* **{format_one_decimal(b)} Sign/Operator Variations:** Create variations by **changing** or **adding** mathematical signs and operators (`+`, `-`, `*`, `/`).\n"
-            f"  * You may also **add a leading sign** (e.g., `+`, `-`) at the start of the expression.\n"
-            f"  * Do **not** alter the numbers, variables, or structure except through sign/operator adjustments.\n"
-            f"* **{format_one_decimal(c)} Uncertain Answers:** Plausible but unverified expressions; not necessarily wrong.\n\n"
-            f"After listing all answers by category, include a **final summary table** with columns:\n"
-            f"**# | Answer | Category (Correct / Sign Variation / Uncertain) | Confidence (1–10)**\n"
-            f"**Rules:**\n"
-            f"* No duplicates.\n"
-            f"* Variations must involve only operator or sign edits (including added prefix signs).\n"
-            f"* Keep syntax valid and clear.\n"
-            f"* No filler, explanations, or meta text.\n"
-            f"* Maintain logical order and consistent format.\n"
-            f"* Show Full Working before answering any question(s)\n\n"
-            f"Question: {prompt}"
+            f"Generate exactly {kernels} unique answers divided as follows: "
+            f"{format_one_decimal(a)} correct, {format_one_decimal(b)} sign variations, "
+            f"{format_one_decimal(c)} uncertain. Question: {prompt}"
         )
     elif typ == "logic":
-        correct = kernels * 0.2
-        uncertain = kernels * 0.8
         system_prompt = (
-            f"Generate exactly {kernels} **unique** answers (no duplicates).\n"
-            f"For each answer, show the **complete step-by-step calculation or reasoning** leading to it, as if solving it manually.\n"
-            f"Do **not** rank or label the answers.\n\n"
-            f"Among the {kernels} answers:\n"
-            f"- {format_one_decimal(correct)} should be **logically or mathematically correct**, according to your reasoning.\n"
-            f"- {format_one_decimal(uncertain)} should be **uncertain or exploratory answers** — they might or might not be correct, but must still follow plausible reasoning.\n\n"
-            f"Question: {prompt}"
+            f"Generate {kernels} unique logical answers with reasoning. Question: {prompt}"
         )
     elif typ == "mcq":
         system_prompt = (
-            f"Generate exactly {kernels} **unique** answers (no duplicates).\n"
-            f"For each answer, show the **complete step-by-step calculation or reasoning** leading to it, as if solving it manually.\n"
-            f"Do **not** rank or label the answers.\n\n"
-            f"Question: {prompt}"
+            f"Generate {kernels} unique MCQ-style answers with full working. Question: {prompt}"
         )
-    else:  # other
+    else:
         system_prompt = (
-            f"Give {kernels} distinct answers (No Duplicates). For each, show the full calculation or step-by-step working that leads to that answer, as if solving it on paper. Do not rank the answers.\n\n"
-            f"Question: {prompt}"
+            f"Generate {kernels} distinct answers showing full reasoning. Question: {prompt}"
         )
 
-    # encode safely
     encoded = quote_plus(system_prompt)
-    url = f"https://chat.openai.com/?q={encoded}&temperory-chat=true"
-
-    # open stones times
-    for _ in range(stones):
-        webbrowser.open_new_tab(url)
+    url = f"https://chat.openai.com/?q={encoded}&temporary-chat=true"
 
     return jsonify({"status": "ok", "opened": stones, "url": url})
 
 if __name__ == "__main__":
-    app.run(port=5000, debug=False)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
